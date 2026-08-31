@@ -168,9 +168,22 @@ static void args_free(Args *a) {
 /* mirrored into the environment on export.                             */
 /* ------------------------------------------------------------------ */
 
+/*
+ * A variable holds a sparse vector of elements.  items[i] is NULL when
+ * that index has never been set, which is how bash arrays behave:
+ *
+ *   f=(1 2 3); unset f[1]; echo ${#f[@]}   ->  2
+ *   ${!f[@]}                               ->  0 2
+ *
+ * A plain scalar is simply a variable with one element, so ${x} and
+ * ${x[0]} name the same thing and nothing else has to know the
+ * difference.
+ */
 typedef struct Var {
     char *name;
-    char *value;
+    char **items;
+    int nitems;        /* one past the highest index ever set */
+    int isarray;       /* assigned with ( ) or through a subscript */
     int exported;
     struct Var *next;
 } Var;
@@ -184,29 +197,141 @@ static Var *var_find(const char *name) {
     return NULL;
 }
 
+static Var *var_make(const char *name) {
+    Var *v = var_find(name);
+    if (v) return v;
+
+    v = xmalloc(sizeof(*v));
+    v->name = xstrdup(name);
+    v->items = NULL;
+    v->nitems = 0;
+    v->isarray = 0;
+    /* a variable inherited from the environment stays exported */
+    v->exported = getenv(name) != NULL;
+    v->next = variables;
+    variables = v;
+    return v;
+}
+
+static void var_clear_items(Var *v) {
+    for (int i = 0; i < v->nitems; i++) free(v->items[i]);
+    free(v->items);
+    v->items = NULL;
+    v->nitems = 0;
+}
+
+/* bash does not put arrays in the environment, so neither do we */
+static void var_sync_env(Var *v) {
+    if (!v->exported) return;
+
+    if (v->isarray) {
+        unsetenv(v->name);
+        return;
+    }
+
+    setenv(v->name, (v->nitems > 0 && v->items[0]) ? v->items[0] : "", 1);
+}
+
+/*
+ * Elements are stored in a dense vector, so a very large index would try
+ * to allocate a very large array: a[999999999]=x froze the shell.  bash
+ * stores arrays as a list and has no practical limit; this caps the index
+ * instead, which is the trade for the simpler storage.
+ */
+#define MAX_ARRAY_INDEX 65535
+
+static void var_put(Var *v, int idx, const char *value) {
+    if (idx < 0 || idx > MAX_ARRAY_INDEX) return;
+
+    if (idx >= v->nitems) {
+        v->items = xrealloc(v->items, sizeof(char *) * (idx + 1));
+        for (int i = v->nitems; i <= idx; i++) v->items[i] = NULL;
+        v->nitems = idx + 1;
+    }
+
+    free(v->items[idx]);
+    v->items[idx] = value ? xstrdup(value) : NULL;
+}
+
 static const char *var_get(const char *name) {
     Var *v = var_find(name);
-    if (v) return v->value;
+    if (v) return (v->nitems > 0 && v->items[0]) ? v->items[0] : NULL;
     return getenv(name);
 }
 
+/* element 0 only, leaving any other elements alone - this is what bash
+   does for  a=(x y); a=z  which gives  z y  */
 static void var_set(const char *name, const char *value) {
+    Var *v = var_make(name);
+    var_put(v, 0, value ? value : "");
+    var_sync_env(v);
+}
+
+static void var_set_index(const char *name, int idx, const char *value) {
+    Var *v = var_make(name);
+    if (idx > 0) v->isarray = 1;
+    var_put(v, idx, value ? value : "");
+    var_sync_env(v);
+}
+
+static void var_set_array(const char *name, char **vals, int n) {
+    Var *v = var_make(name);
+    var_clear_items(v);
+    v->isarray = 1;
+    for (int i = 0; i < n; i++) var_put(v, i, vals[i]);
+    var_sync_env(v);
+}
+
+static void var_append_array(const char *name, char **vals, int n) {
+    Var *v = var_make(name);
+    v->isarray = 1;
+    int base = v->nitems;
+    for (int i = 0; i < n; i++) var_put(v, base + i, vals[i]);
+    var_sync_env(v);
+}
+
+static void var_append(const char *name, const char *value) {
+    Var *v = var_make(name);
+
+    const char *old = (v->nitems > 0 && v->items[0]) ? v->items[0] : "";
+    size_t n = strlen(old) + strlen(value ? value : "") + 1;
+
+    char *joined = xmalloc(n);
+    strcpy(joined, old);
+    strcat(joined, value ? value : "");
+
+    var_put(v, 0, joined);
+    free(joined);
+    var_sync_env(v);
+}
+
+static const char *var_elem(const char *name, int idx) {
     Var *v = var_find(name);
 
     if (!v) {
-        v = xmalloc(sizeof(*v));
-        v->name = xstrdup(name);
-        v->value = NULL;
-        /* a variable inherited from the environment stays exported */
-        v->exported = getenv(name) != NULL;
-        v->next = variables;
-        variables = v;
+        if (idx == 0) return getenv(name);
+        return NULL;
     }
 
-    free(v->value);
-    v->value = xstrdup(value ? value : "");
+    if (idx < 0 || idx >= v->nitems) return NULL;
+    return v->items[idx];
+}
 
-    if (v->exported) setenv(v->name, v->value, 1);
+/* highest index that is actually set, or -1 */
+static int var_top_index(const char *name) {
+    Var *v = var_find(name);
+    if (!v) return getenv(name) ? 0 : -1;
+    for (int i = v->nitems - 1; i >= 0; i--) if (v->items[i]) return i;
+    return -1;
+}
+
+static void var_unset_index(const char *name, int idx) {
+    Var *v = var_find(name);
+    if (!v || idx < 0 || idx >= v->nitems) return;
+
+    free(v->items[idx]);
+    v->items[idx] = NULL;
+    var_sync_env(v);
 }
 
 static void var_export(const char *name) {
@@ -214,12 +339,12 @@ static void var_export(const char *name) {
 
     if (!v) {
         const char *e = getenv(name);
-        var_set(name, e ? e : "");
-        v = var_find(name);
+        v = var_make(name);
+        if (v->nitems == 0) var_put(v, 0, e ? e : "");
     }
 
     v->exported = 1;
-    setenv(v->name, v->value, 1);
+    var_sync_env(v);
 }
 
 static void var_unset(const char *name) {
@@ -230,8 +355,8 @@ static void var_unset(const char *name) {
             if (prev) prev->next = v->next;
             else variables = v->next;
 
+            var_clear_items(v);
             free(v->name);
-            free(v->value);
             free(v);
             break;
         }
@@ -244,12 +369,132 @@ static void vars_free_all(void) {
     Var *v = variables;
     while (v) {
         Var *nx = v->next;
+        var_clear_items(v);
         free(v->name);
-        free(v->value);
         free(v);
         v = nx;
     }
     variables = NULL;
+}
+
+/*
+ * Recognise an assignment word: NAME=, NAME+=, NAME[sub]= or NAME[sub]+=.
+ * Returns 0 when the word is not an assignment.  Any output pointer may
+ * be NULL if the caller only wants to know.  *sub and *name are owned by
+ * the caller; *value points into the word.
+ */
+static int split_assign(const char *w, char **name, char **sub, int *append,
+                        const char **value) {
+    if (!w) return 0;
+    if (!(isalpha((unsigned char)w[0]) || w[0] == '_')) return 0;
+
+    int i = 1;
+    while (w[i] && (isalnum((unsigned char)w[i]) || w[i] == '_')) i++;
+
+    int nlen = i;
+    char *sb = NULL;
+
+    if (w[i] == '[') {
+        int depth = 0;
+        int start = i + 1;
+        int j = i;
+
+        while (w[j]) {
+            if (w[j] == '[') depth++;
+            else if (w[j] == ']') { depth--; if (depth == 0) break; }
+            j++;
+        }
+
+        if (w[j] != ']') return 0;
+
+        sb = xmalloc(j - start + 1);
+        memcpy(sb, w + start, j - start);
+        sb[j - start] = '\0';
+        i = j + 1;
+    }
+
+    int ap = 0;
+    if (w[i] == '+' && w[i + 1] == '=') { ap = 1; i += 2; }
+    else if (w[i] == '=') i += 1;
+    else { free(sb); return 0; }
+
+    if (name) {
+        char *nm = xmalloc(nlen + 1);
+        memcpy(nm, w, nlen);
+        nm[nlen] = '\0';
+        *name = nm;
+    }
+
+    if (sub) *sub = sb;
+    else free(sb);
+
+    if (append) *append = ap;
+    if (value) *value = w + i;
+    return 1;
+}
+
+static int is_assign_word(const char *w) {
+    return split_assign(w, NULL, NULL, NULL, NULL);
+}
+
+/* a full copy of a variable, so prefix assignments and `local` can put
+   an array back exactly as it was */
+typedef struct {
+    char *name;
+    char **items;
+    int nitems;
+    int isarray;
+    int existed;
+    int exported;
+} VarSnap;
+
+static void var_snapshot(const char *name, VarSnap *sn) {
+    Var *v = var_find(name);
+    const char *env = v ? NULL : getenv(name);
+
+    sn->name = xstrdup(name);
+    sn->items = NULL;
+    sn->nitems = 0;
+    sn->isarray = 0;
+    sn->existed = 0;
+    sn->exported = 0;
+
+    if (v) {
+        sn->existed = 1;
+        sn->exported = v->exported;
+        sn->isarray = v->isarray;
+        sn->nitems = v->nitems;
+        sn->items = xmalloc(sizeof(char *) * (v->nitems ? v->nitems : 1));
+        for (int i = 0; i < v->nitems; i++) {
+            sn->items[i] = v->items[i] ? xstrdup(v->items[i]) : NULL;
+        }
+    } else if (env) {
+        sn->existed = 1;
+        sn->exported = 1;
+        sn->nitems = 1;
+        sn->items = xmalloc(sizeof(char *));
+        sn->items[0] = xstrdup(env);
+    }
+}
+
+static void var_restore(VarSnap *sn) {
+    var_unset(sn->name);
+
+    if (!sn->existed) return;
+
+    Var *v = var_make(sn->name);
+    v->isarray = sn->isarray;
+    for (int i = 0; i < sn->nitems; i++) var_put(v, i, sn->items[i]);
+
+    if (sn->exported) { v->exported = 1; var_sync_env(v); }
+}
+
+static void var_snap_free(VarSnap *sn) {
+    for (int i = 0; i < sn->nitems; i++) free(sn->items[i]);
+    free(sn->items);
+    free(sn->name);
+    sn->items = NULL;
+    sn->nitems = 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -257,10 +502,7 @@ static void vars_free_all(void) {
 /* ------------------------------------------------------------------ */
 
 typedef struct SavedVar {
-    char *name;
-    char *value;
-    int existed;
-    int exported;
+    VarSnap snap;
     struct SavedVar *next;
 } SavedVar;
 
@@ -296,15 +538,8 @@ static void pop_frame(void) {
     while (s) {
         SavedVar *nx = s->next;
 
-        if (s->existed) {
-            var_set(s->name, s->value);
-            if (s->exported) var_export(s->name);
-        } else {
-            var_unset(s->name);
-        }
-
-        free(s->name);
-        free(s->value);
+        var_restore(&s->snap);
+        var_snap_free(&s->snap);
         free(s);
         s = nx;
     }
@@ -326,28 +561,11 @@ static void frame_make_local(const char *name) {
     if (!frames || !frames->next) return;   /* not inside a function */
 
     for (SavedVar *s = frames->locals; s; s = s->next) {
-        if (strcmp(s->name, name) == 0) return;
+        if (strcmp(s->snap.name, name) == 0) return;
     }
-
-    Var *v = var_find(name);
-    const char *env = v ? NULL : getenv(name);
 
     SavedVar *s = xmalloc(sizeof(*s));
-    s->name = xstrdup(name);
-
-    if (v) {
-        s->existed = 1;
-        s->value = xstrdup(v->value);
-        s->exported = v->exported;
-    } else if (env) {
-        s->existed = 1;
-        s->value = xstrdup(env);
-        s->exported = 1;
-    } else {
-        s->existed = 0;
-        s->value = NULL;
-        s->exported = 0;
-    }
+    var_snapshot(name, &s->snap);
 
     s->next = frames->locals;
     frames->locals = s;
@@ -1034,11 +1252,24 @@ typedef struct {
     int flags;       /* heredoc: 1 = delimiter was quoted */
 } Redir;
 
+/* NAME=(a b c) or NAME+=(a b c) sitting in the assignment prefix.
+   `order` is how many prefix words came first, so the assignments are
+   applied left to right the way they were written. */
+typedef struct {
+    char *name;
+    int append;
+    char **words;
+    int nwords;
+    int order;
+} ArrAssign;
+
 typedef struct {
     char **words;
     int nwords;
     Redir *redirs;
     int nredir;
+    ArrAssign *arrs;
+    int narr;
 } Simple;
 
 typedef struct {
@@ -1161,6 +1392,8 @@ static Simple *new_simple(void) {
     s->words = xmalloc(sizeof(char *));
     s->words[0] = NULL;
     s->nwords = 0;
+    s->arrs = NULL;
+    s->narr = 0;
     s->redirs = NULL;
     s->nredir = 0;
     return s;
@@ -1302,6 +1535,12 @@ static void free_node(Node *n) {
             Simple *s = n->data;
             for (int i = 0; i < s->nwords; i++) free(s->words[i]);
             free(s->words);
+            for (int i = 0; i < s->narr; i++) {
+                free(s->arrs[i].name);
+                for (int j = 0; j < s->arrs[i].nwords; j++) free(s->arrs[i].words[j]);
+                free(s->arrs[i].words);
+            }
+            free(s->arrs);
             for (int i = 0; i < s->nredir; i++) free(s->redirs[i].file);
             free(s->redirs);
             free(s);
@@ -1511,12 +1750,96 @@ static int parse_redir(Parser *p, Redir **rs, int *n) {
     return 0;
 }
 
+static void simple_add_array(Simple *s, char *name, int append,
+                             char **words, int nwords, int order) {
+    s->arrs = xrealloc(s->arrs, sizeof(ArrAssign) * (s->narr + 1));
+    s->arrs[s->narr].name = name;
+    s->arrs[s->narr].append = append;
+    s->arrs[s->narr].words = words;
+    s->arrs[s->narr].nwords = nwords;
+    s->arrs[s->narr].order = order;
+    s->narr++;
+}
+
+/*
+ * NAME=(a b c) in the assignment prefix.  The lexer stops the word at the
+ * '(' so this arrives as the word "NAME=" followed by T_LPAREN; a function
+ * definition is already handled in parse_command, and a non-empty value
+ * before the paren is not an array literal, so neither can be confused
+ * with one.
+ */
+static int is_decl_word(const char *w) {
+    return w && (strcmp(w, "local") == 0 || strcmp(w, "declare") == 0 ||
+                 strcmp(w, "typeset") == 0);
+}
+
+static int parse_array_assign(Parser *p, Simple *s, int prefix) {
+    Token *t = peek(p);
+
+    /* also after a declaration builtin: local a=(1 2) */
+    if (!prefix && !(s->nwords == 1 && is_decl_word(s->words[0]))) return 0;
+    if (t->type != T_WORD || t->quoted) return 0;
+    if (peek_at(p, 1)->type != T_LPAREN) return 0;
+
+    char *name = NULL;
+    char *sub = NULL;
+    int append = 0;
+    const char *value = NULL;
+
+    if (!split_assign(t->text, &name, &sub, &append, &value)) return 0;
+
+    if (sub || value[0] != '\0') {
+        free(name);
+        free(sub);
+        return 0;
+    }
+
+    advance(p);   /* NAME= */
+    advance(p);   /* (     */
+
+    Args elems;
+    args_init(&elems);
+
+    for (;;) {
+        skip_newlines(p);
+
+        Token *e = peek(p);
+        if (e->type == T_RPAREN || e->type == T_END) break;
+
+        if (e->type == T_WORD || e->type == T_IO_NUMBER ||
+            e->type == T_LBRACE || e->type == T_RBRACE) {
+            args_add_copy(&elems, e->text);
+            advance(p);
+            continue;
+        }
+
+        break;
+    }
+
+    if (peek_type(p) != T_RPAREN) {
+        parse_error(p, "expected ')' in array assignment");
+        args_free(&elems);
+        free(name);
+        return -1;
+    }
+
+    advance(p);
+
+    simple_add_array(s, name, append, elems.v, elems.n, s->nwords);
+    return 1;
+}
+
 static Node *parse_simple_command(Parser *p) {
     Simple *s = new_simple();
     int any = 0;
+    int prefix = 1;
 
     for (;;) {
         Token *t = peek(p);
+
+        int a = parse_array_assign(p, s, prefix);
+        if (a < 0) { free_node(new_simple_node(s)); return NULL; }
+        if (a > 0) { any = 1; continue; }
 
         int r = parse_redir(p, &s->redirs, &s->nredir);
         if (r < 0) { free_node(new_simple_node(s)); return NULL; }
@@ -1538,6 +1861,11 @@ static Node *parse_simple_command(Parser *p) {
          */
         if (t->type == T_WORD ||
             (any && (t->type == T_LBRACE || t->type == T_RBRACE))) {
+            if (prefix && !(t->type == T_WORD && !t->quoted &&
+                            is_assign_word(t->text))) {
+                prefix = 0;
+            }
+
             simple_add_word(s, t->text ? t->text : "");
             advance(p);
             any = 1;
@@ -1948,7 +2276,12 @@ static Node *parse_command(Parser *p) {
 
     if (is_word(t, "function")) return parse_function_keyword(p);
 
-    if (t->type == T_WORD && !t->quoted) {
+    /*
+     * name() { ... } is a function definition, but g=() is an empty array
+     * literal - a function name cannot contain '=', so the assignment
+     * test is what tells them apart.
+     */
+    if (t->type == T_WORD && !t->quoted && !is_assign_word(t->text)) {
         Token *n1 = peek_at(p, 1);
         Token *n2 = peek_at(p, 2);
 
@@ -2083,6 +2416,67 @@ typedef struct {
 static int run_program_string(const char *s);
 static char *expand_scalar(const char *raw);
 static long arith_eval(const char *expr, int *err);
+static int assign_index(const char *name, const char *sub);
+
+/*
+ * ${var:offset:length} and ${a[@]:offset:length}.  A negative offset
+ * counts back from the end and a negative length trims from the end,
+ * the same as bash.  A missing length means "to the end".
+ */
+static int slice_bound(const char *text, long total, long dflt) {
+    if (!text) return (int)dflt;
+
+    char *expanded = expand_scalar(text);
+
+    int err = 0;
+    long v = arith_eval(expanded, &err);
+    free(expanded);
+
+    if (err) return (int)dflt;
+    if (v < 0) v += total;
+    return (int)v;
+}
+
+static char *slice_string(const char *val, const char *off, const char *len) {
+    long total = (long)strlen(val);
+
+    long start = slice_bound(off, total, 0);
+    if (start < 0) start = 0;
+    if (start > total) start = total;
+
+    long count = len ? slice_bound(len, 0, total - start) : total - start;
+    if (len && count < 0) count = (total - start) + count;
+    if (count < 0) count = 0;
+    if (start + count > total) count = total - start;
+
+    char *out = xmalloc(count + 1);
+    memcpy(out, val + start, count);
+    out[count] = '\0';
+    return out;
+}
+
+static void slice_args(Args *a, const char *off, const char *len) {
+    if (!off) return;
+
+    long total = a->n;
+
+    long start = slice_bound(off, total, 0);
+    if (start < 0) start = 0;
+    if (start > total) start = total;
+
+    long count = len ? slice_bound(len, 0, total - start) : total - start;
+    if (len && count < 0) count = (total - start) + count;
+    if (count < 0) count = 0;
+    if (start + count > total) count = total - start;
+
+    for (long k = 0; k < start; k++) free(a->v[k]);
+    for (long k = start + count; k < total; k++) free(a->v[k]);
+
+    for (long k = 0; k < count; k++) a->v[k] = a->v[start + k];
+
+    a->n = (int)count;
+    a->v[a->n] = NULL;
+}
 
 static void exp_init(Exp *e, Args *out, int mode) {
     e->out = out;
@@ -2441,9 +2835,13 @@ static int expand_dollar(Exp *e, const char *s, int i, int inquote) {
 
         int nlen = 0;
         int hashlen = 0;
+        int bang = 0;
 
         if (s[i] == '#' && s[i + 1] && s[i + 1] != '}') {
             hashlen = 1;
+            i++;
+        } else if (s[i] == '!' && s[i + 1] && s[i + 1] != '}') {
+            bang = 1;
             i++;
         }
 
@@ -2460,6 +2858,119 @@ static int expand_dollar(Exp *e, const char *s, int i, int inquote) {
         memcpy(name, s + start, nlen);
         name[nlen] = '\0';
 
+        /* [subscript] */
+        char *sub = NULL;
+        if (s[i] == '[') {
+            int depth = 0;
+            int sstart = i + 1;
+            int j = i;
+
+            while (s[j]) {
+                if (s[j] == '[') depth++;
+                else if (s[j] == ']') { depth--; if (depth == 0) break; }
+                j++;
+            }
+
+            if (s[j] == ']') {
+                sub = xmalloc(j - sstart + 1);
+                memcpy(sub, s + sstart, j - sstart);
+                sub[j - sstart] = '\0';
+                i = j + 1;
+            }
+        }
+
+        /* :offset:length  -  not to be confused with :- := :+ :? */
+        char *sl_off = NULL;
+        char *sl_len = NULL;
+
+        if (s[i] == ':' && s[i + 1] && !strchr("-=?+", s[i + 1])) {
+            i++;
+            int st2 = i;
+            while (s[i] && s[i] != ':' && s[i] != '}') i++;
+
+            sl_off = xmalloc(i - st2 + 1);
+            memcpy(sl_off, s + st2, i - st2);
+            sl_off[i - st2] = '\0';
+
+            if (s[i] == ':') {
+                i++;
+                st2 = i;
+                while (s[i] && s[i] != '}') i++;
+
+                sl_len = xmalloc(i - st2 + 1);
+                memcpy(sl_len, s + st2, i - st2);
+                sl_len[i - st2] = '\0';
+            }
+        }
+
+        /*
+         * ${a[@]} / ${a[*]} / ${!a[@]} / ${#a[@]} - these produce a whole
+         * list, so they are handled here and return; everything below
+         * deals with a single value.
+         */
+        if (sub && (strcmp(sub, "@") == 0 || strcmp(sub, "*") == 0)) {
+            int star = strcmp(sub, "*") == 0;
+
+            Args items;
+            args_init(&items);
+
+            Var *av = var_find(name);
+            if (av) {
+                for (int k = 0; k < av->nitems; k++) {
+                    if (!av->items[k]) continue;
+
+                    if (bang) {
+                        char b[32];
+                        snprintf(b, sizeof(b), "%d", k);
+                        args_add_copy(&items, b);
+                    } else {
+                        args_add_copy(&items, av->items[k]);
+                    }
+                }
+            } else if (!bang) {
+                const char *env = getenv(name);
+                if (env) args_add_copy(&items, env);
+            }
+
+            slice_args(&items, sl_off, sl_len);
+
+            if (hashlen) {
+                char b[32];
+                snprintf(b, sizeof(b), "%d", items.n);
+                exp_addstr(e, b, m);
+            } else if (star || !inquote || e->mode != EXP_WORD) {
+                const char *ifs = var_get("IFS");
+                char sep = ' ';
+                if (star && inquote) sep = (ifs && ifs[0]) ? ifs[0] : (ifs ? '\0' : ' ');
+
+                for (int k = 0; k < items.n; k++) {
+                    if (k && sep) exp_addch(e, sep, m);
+                    exp_addstr(e, items.v[k], m);
+                }
+            } else {
+                if (items.n == 0) {
+                    e->at_null = 1;
+                } else {
+                    for (int k = 0; k < items.n; k++) {
+                        if (k) exp_flush(e);
+                        e->started = 1;
+                        e->hard = 1;
+                        exp_addstr(e, items.v[k], 'Q');
+                    }
+                }
+            }
+
+            args_free(&items);
+            free(sl_off);
+            free(sl_len);
+            free(sub);
+            free(name);
+
+            while (s[i] && s[i] != '}') i++;
+            if (s[i] == '}') i++;
+            return i;
+        }
+
         const char *val = NULL;
         char numbuf[32];
 
@@ -2468,7 +2979,10 @@ static int expand_dollar(Exp *e, const char *s, int i, int inquote) {
             if (!isdigit((unsigned char)name[k])) { all_digits = 0; break; }
         }
 
-        if (all_digits) {
+        if (sub) {
+            int idx = assign_index(name, sub);
+            val = idx < 0 ? NULL : var_elem(name, idx);
+        } else if (all_digits) {
             int num = atoi(name);
             if (num < cur_argc()) val = cur_argv()[num];
         } else if (strcmp(name, "#") == 0) {
@@ -2483,6 +2997,16 @@ static int expand_dollar(Exp *e, const char *s, int i, int inquote) {
             val = numbuf;
         } else {
             val = var_get(name);
+        }
+
+        /* ${!x} - the value of the variable that x names */
+        if (bang && val) val = var_get(val);
+        else if (bang) val = NULL;
+
+        char *sliced = NULL;
+        if (sl_off) {
+            sliced = slice_string(val ? val : "", sl_off, sl_len);
+            val = sliced;
         }
 
         /* collect the word after the operator, up to the matching '}' */
@@ -2606,6 +3130,10 @@ static int expand_dollar(Exp *e, const char *s, int i, int inquote) {
 
         free(arg);
         free(name);
+        free(sub);
+        free(sl_off);
+        free(sl_len);
+        free(sliced);
         return i;
     }
 
@@ -2872,7 +3400,40 @@ static long ar_primary(Arith *a) {
         memcpy(name, a->s + start, len);
         name[len] = '\0';
 
-        const char *val = var_get(name);
+        const char *val;
+
+        /* a[expr] inside arithmetic, e.g. $(( total + counts[i] )) */
+        if (a->s[a->i] == '[') {
+            int depth = 0;
+            int sstart = a->i + 1;
+            int j = a->i;
+
+            while (a->s[j]) {
+                if (a->s[j] == '[') depth++;
+                else if (a->s[j] == ']') { depth--; if (depth == 0) break; }
+                j++;
+            }
+
+            if (a->s[j] != ']') { a->err = 1; free(name); return 0; }
+
+            char *sb = xmalloc(j - sstart + 1);
+            memcpy(sb, a->s + sstart, j - sstart);
+            sb[j - sstart] = '\0';
+
+            int err = 0;
+            long idx = arith_eval(sb, &err);
+            free(sb);
+
+            a->i = j + 1;
+
+            if (err) { a->err = 1; free(name); return 0; }
+            if (idx < 0) idx = var_top_index(name) + 1 + idx;
+
+            val = idx < 0 ? NULL : var_elem(name, (int)idx);
+        } else {
+            val = var_get(name);
+        }
+
         free(name);
 
         if (!val || !*val) return 0;
@@ -3138,7 +3699,17 @@ static int builtin_echo(char **argv) {
 static int builtin_export(char **argv) {
     if (!argv[1]) {
         for (Var *v = variables; v; v = v->next) {
-            if (v->exported) printf("export %s='%s'\n", v->name, v->value);
+            if (!v->exported) continue;
+            if (v->isarray) {
+                printf("export %s=(", v->name);
+                for (int i = 0; i < v->nitems; i++) {
+                    if (v->items[i]) printf("%s[%d]='%s'", i ? " " : "", i, v->items[i]);
+                }
+                printf(")\n");
+            } else {
+                printf("export %s='%s'\n", v->name,
+                       (v->nitems > 0 && v->items[0]) ? v->items[0] : "");
+            }
         }
         return 0;
     }
@@ -3167,6 +3738,34 @@ static int builtin_export(char **argv) {
 
 static int builtin_unset(char **argv) {
     for (int i = 1; argv[i]; i++) {
+        /* unset a[1] removes that element and leaves the array sparse */
+        char *br = strchr(argv[i], '[');
+        if (br && argv[i][strlen(argv[i]) - 1] == ']') {
+            size_t nlen = (size_t)(br - argv[i]);
+
+            char *nm = xmalloc(nlen + 1);
+            memcpy(nm, argv[i], nlen);
+            nm[nlen] = '\0';
+
+            if (!valid_name(nm)) {
+                fprintf(stderr, "unset: `%s': not a valid identifier\n", argv[i]);
+                free(nm);
+                return 1;
+            }
+
+            size_t slen = strlen(br + 1) - 1;
+            char *sb = xmalloc(slen + 1);
+            memcpy(sb, br + 1, slen);
+            sb[slen] = '\0';
+
+            int idx = assign_index(nm, sb);
+            if (idx >= 0) var_unset_index(nm, idx);
+
+            free(sb);
+            free(nm);
+            continue;
+        }
+
         if (valid_name(argv[i])) var_unset(argv[i]);
         else {
             fprintf(stderr, "unset: `%s': not a valid identifier\n", argv[i]);
@@ -3454,7 +4053,18 @@ static int builtin_shift(char **argv) {
 
 static int builtin_set(char **argv) {
     if (!argv[1]) {
-        for (Var *v = variables; v; v = v->next) printf("%s=%s\n", v->name, v->value);
+        for (Var *v = variables; v; v = v->next) {
+            if (v->isarray) {
+                printf("%s=(", v->name);
+                for (int i = 0; i < v->nitems; i++) {
+                    if (v->items[i]) printf("%s[%d]=\"%s\"", i ? " " : "", i, v->items[i]);
+                }
+                printf(")\n");
+            } else {
+                printf("%s=%s\n", v->name,
+                       (v->nitems > 0 && v->items[0]) ? v->items[0] : "");
+            }
+        }
         return 0;
     }
 
@@ -3758,36 +4368,120 @@ static int run_builtin(char **argv) {
 
 typedef struct {
     char *name;
-    char *value;
+    char *sub;      /* raw subscript text, or NULL */
+    int append;     /* += */
+    char *value;    /* already expanded */
 } Assign;
 
-typedef struct {
-    char *name;
-    char *old;
-    int existed;
-    int exported;
-} EnvBackup;
+typedef VarSnap EnvBackup;
 
-static void apply_assigns_env(Assign *a, int n) {
-    for (int i = 0; i < n; i++) setenv(a[i].name, a[i].value, 1);
+/*
+ * Resolve a subscript to an index.  A negative index counts back from the
+ * highest element that is set, which is what bash does for ${a[-1]}.
+ * Returns -1 when the subscript is not usable.
+ */
+static int assign_index(const char *name, const char *sub) {
+    char *text = expand_scalar(sub);
+
+    int err = 0;
+    long idx = arith_eval(text, &err);
+
+    if (err) {
+        fprintf(stderr, "minishell: %s: bad array subscript: %s\n", name, text);
+        free(text);
+        return -1;
+    }
+
+    free(text);
+
+    if (idx < 0) idx = var_top_index(name) + 1 + idx;
+    if (idx < 0) {
+        fprintf(stderr, "minishell: %s: subscript out of range\n", name);
+        return -1;
+    }
+
+    if (idx > MAX_ARRAY_INDEX) {
+        fprintf(stderr, "minishell: %s: subscript %ld above the limit of %d\n",
+                name, idx, MAX_ARRAY_INDEX);
+        return -1;
+    }
+
+    return (int)idx;
 }
 
-static EnvBackup *save_and_set_assigns(Assign *a, int n, int *nb_out) {
-    EnvBackup *b = xmalloc(sizeof(EnvBackup) * (n ? n : 1));
+static void assign_apply(Assign *a) {
+    if (a->sub) {
+        int idx = assign_index(a->name, a->sub);
+        if (idx < 0) return;
+
+        if (a->append) {
+            const char *old = var_elem(a->name, idx);
+            size_t n = strlen(old ? old : "") + strlen(a->value) + 1;
+
+            char *joined = xmalloc(n);
+            strcpy(joined, old ? old : "");
+            strcat(joined, a->value);
+
+            var_set_index(a->name, idx, joined);
+            free(joined);
+        } else {
+            var_set_index(a->name, idx, a->value);
+        }
+
+        return;
+    }
+
+    if (a->append) var_append(a->name, a->value);
+    else var_set(a->name, a->value);
+}
+
+/* NAME=(...) - each element word goes through full word expansion, so
+   a=($(echo x y)) is two elements and a=(*.c) globs */
+static void array_apply(ArrAssign *aa) {
+    Args vals;
+    args_init(&vals);
+
+    for (int i = 0; i < aa->nwords; i++) expand_to_args(aa->words[i], &vals);
+
+    if (aa->append) var_append_array(aa->name, vals.v, vals.n);
+    else var_set_array(aa->name, vals.v, vals.n);
+
+    args_free(&vals);
+}
+
+/* the prefix as written, left to right: plain assignments and NAME=(...)
+   interleaved in source order */
+static void assigns_apply_all(Assign *a, int n, ArrAssign *arrs, int narr) {
+    for (int i = 0; i <= n; i++) {
+        for (int k = 0; k < narr; k++) {
+            if (arrs[k].order == i) array_apply(&arrs[k]);
+        }
+        if (i < n) assign_apply(&a[i]);
+    }
+}
+
+static void apply_assigns_env(Assign *a, int n) {
+    for (int i = 0; i < n; i++) {
+        if (a[i].sub || a[i].append) { assign_apply(&a[i]); continue; }
+        setenv(a[i].name, a[i].value, 1);
+    }
+}
+
+static EnvBackup *save_and_set_assigns(Assign *a, int n,
+                                       ArrAssign *arrs, int narr, int *nb_out) {
+    int total = n + narr;
+    EnvBackup *b = xmalloc(sizeof(EnvBackup) * (total ? total : 1));
     int nb = 0;
 
-    for (int i = 0; i < n; i++) {
-        Var *v = var_find(a[i].name);
-        const char *old = v ? v->value : getenv(a[i].name);
+    for (int i = 0; i < n; i++) var_snapshot(a[i].name, &b[nb++]);
 
-        b[nb].name = xstrdup(a[i].name);
-        b[nb].existed = old ? 1 : 0;
-        b[nb].old = old ? xstrdup(old) : NULL;
-        b[nb].exported = v ? v->exported : (getenv(a[i].name) != NULL);
-
-        var_set(a[i].name, a[i].value);
-        nb++;
+    /* only the ones in the assignment prefix are temporary; an array
+       literal after `local` belongs to the command, not to the prefix */
+    for (int i = 0; i < narr; i++) {
+        if (arrs[i].order <= n) var_snapshot(arrs[i].name, &b[nb++]);
     }
+
+    assigns_apply_all(a, n, arrs, narr);
 
     *nb_out = nb;
     return b;
@@ -3797,15 +4491,8 @@ static void restore_env_backups(EnvBackup *b, int nb) {
     if (!b) return;
 
     for (int i = nb - 1; i >= 0; i--) {
-        if (b[i].existed) {
-            var_set(b[i].name, b[i].old ? b[i].old : "");
-            if (b[i].exported) var_export(b[i].name);
-        } else {
-            var_unset(b[i].name);
-        }
-
-        free(b[i].old);
-        free(b[i].name);
+        var_restore(&b[i]);
+        var_snap_free(&b[i]);
     }
 
     free(b);
@@ -3816,6 +4503,7 @@ static void free_assigns(Assign *a, int n) {
 
     for (int i = 0; i < n; i++) {
         free(a[i].name);
+        free(a[i].sub);
         free(a[i].value);
     }
 
@@ -4054,23 +4742,17 @@ static int execute_simple(Simple *s) {
     int nassign = 0;
     long subs_before = cmdsub_count;
 
-    while (s->words[nassign] && name_len_before_eq(s->words[nassign]) > 0) {
-        nassign++;
-    }
+    while (s->words[nassign] && is_assign_word(s->words[nassign])) nassign++;
 
     Assign *assigns = xmalloc(sizeof(Assign) * (nassign ? nassign : 1));
 
     for (int i = 0; i < nassign; i++) {
-        int len = name_len_before_eq(s->words[i]);
+        const char *value = NULL;
 
-        char *name = xmalloc(len + 1);
-        memcpy(name, s->words[i], len);
-        name[len] = '\0';
+        split_assign(s->words[i], &assigns[i].name, &assigns[i].sub,
+                     &assigns[i].append, &value);
 
-        char *value = expand_scalar(s->words[i] + len + 1);
-
-        assigns[i].name = name;
-        assigns[i].value = value;
+        assigns[i].value = expand_scalar(value);
     }
 
     Args args;
@@ -4092,7 +4774,7 @@ static int execute_simple(Simple *s) {
     if (opt_xtrace && args.n > 0) xtrace(args.v);
 
     if (args.n == 0) {
-        for (int i = 0; i < nassign; i++) var_set(assigns[i].name, assigns[i].value);
+        assigns_apply_all(assigns, nassign, s->arrs, s->narr);
 
         /*
          * POSIX: a command with no command name but with a command
@@ -4114,7 +4796,11 @@ static int execute_simple(Simple *s) {
 
     FuncDef *f = find_function(args.v[0]);
     if (f) {
-        if (nassign > 0) eb = save_and_set_assigns(assigns, nassign, &neb);
+        int nprefix_arr = 0;
+        for (int k = 0; k < s->narr; k++) if (s->arrs[k].order <= nassign) nprefix_arr++;
+
+        if (nassign > 0 || nprefix_arr > 0)
+            eb = save_and_set_assigns(assigns, nassign, s->arrs, s->narr, &neb);
 
         if (apply_redirs_current_files(s->redirs, s->nredir, files, &fb, &nfb) < 0) {
             if (eb) restore_env_backups(eb, neb);
@@ -4156,12 +4842,28 @@ static int execute_simple(Simple *s) {
     }
 
     if (is_builtin(args.v[0])) {
-        if (nassign > 0) eb = save_and_set_assigns(assigns, nassign, &neb);
+        int nprefix_arr = 0;
+        for (int k = 0; k < s->narr; k++) if (s->arrs[k].order <= nassign) nprefix_arr++;
+
+        if (nassign > 0 || nprefix_arr > 0)
+            eb = save_and_set_assigns(assigns, nassign, s->arrs, s->narr, &neb);
 
         if (apply_redirs_current_files(s->redirs, s->nredir, files, &fb, &nfb) < 0) {
             if (eb) restore_env_backups(eb, neb);
             status = 1;
             goto cleanup;
+        }
+
+        /*
+         * local a=(1 2) - the array literal is not part of the assignment
+         * prefix, so make the name local first and then assign it.
+         */
+        if (is_decl_word(args.v[0])) {
+            for (int k = 0; k < s->narr; k++) {
+                if (s->arrs[k].order == 0) continue;
+                frame_make_local(s->arrs[k].name);
+                array_apply(&s->arrs[k]);
+            }
         }
 
         status = run_builtin(args.v);
@@ -4181,6 +4883,7 @@ static int execute_simple(Simple *s) {
         signal(SIGQUIT, SIG_DFL);
 
         apply_assigns_env(assigns, nassign);
+        for (int i = 0; i < s->narr; i++) array_apply(&s->arrs[i]);
 
         if (!setup_redirs_files(s->redirs, s->nredir, files)) _exit(1);
 
