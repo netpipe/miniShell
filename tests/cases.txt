@@ -1,0 +1,1455 @@
+# One case per record.  Format:
+#   @name <case name>
+#   @ref  dash|bash      reference shell the expectation was taken from
+#   @note <why this one is not dash>   (optional)
+#   ...script lines...
+#   @@
+# $MSH_TMP is a scratch directory the runner creates and removes.
+
+@name echo
+@ref dash
+echo hello world
+@@
+@name echo -n
+@ref dash
+echo -n a; echo b
+@@
+@name var
+@ref dash
+X=5; echo $X
+@@
+@name var braces
+@ref dash
+X=5; echo ${X}b
+@@
+@name quotes
+@ref dash
+X="a b"; echo "$X"
+@@
+@name split
+@ref dash
+X="a b"; for w in $X; do echo "[$w]"; done
+@@
+@name status
+@ref dash
+false; echo $?
+@@
+@name status ok
+@ref dash
+true; echo $?
+@@
+@name andor
+@ref dash
+true && echo yes; false || echo no
+@@
+@name pipe
+@ref dash
+echo hello | tr a-z A-Z
+@@
+@name pipe status
+@ref dash
+true | false; echo $?
+@@
+@name redir out
+@ref dash
+echo hi > /tmp/mshtest1; cat /tmp/mshtest1; rm -f /tmp/mshtest1
+@@
+@name redir append
+@ref dash
+echo a > /tmp/mshtest2; echo b >> /tmp/mshtest2; cat /tmp/mshtest2; rm -f /tmp/mshtest2
+@@
+@name redir in
+@ref dash
+printf "x\ny\n" > /tmp/mshtest3; cat < /tmp/mshtest3; rm -f /tmp/mshtest3
+@@
+@name if
+@ref dash
+if [ 1 = 1 ]; then echo y; else echo n; fi
+@@
+@name elif
+@ref dash
+if [ 1 = 2 ]; then echo a; elif [ 1 = 1 ]; then echo b; else echo c; fi
+@@
+@name while
+@ref dash
+i=0; while [ $i -lt 3 ]; do echo $i; i=`expr $i + 1`; done
+@@
+@name for
+@ref dash
+for x in a b c; do echo $x; done
+@@
+@name func
+@ref dash
+f() { echo "got $1"; }; f hi
+@@
+@name func ret
+@ref dash
+f() { return 3; }; f; echo $?
+@@
+@name nested func args
+@ref dash
+f() { echo $#; }; f a b c
+@@
+@name break
+@ref dash
+for i in 1 2 3; do [ $i = 2 ] && break; echo $i; done
+@@
+@name continue
+@ref dash
+for i in 1 2 3; do [ $i = 2 ] && continue; echo $i; done
+@@
+@name break 2
+@ref dash
+for i in 1 2; do for j in 1 2; do break 2; done; echo no; done; echo done
+@@
+@name subshell
+@ref dash
+(echo a; echo b)
+@@
+@name subshell var
+@ref dash
+X=1; (X=2); echo $X
+@@
+@name brace group
+@ref dash
+{ echo a; echo b; }
+@@
+@name cmdsub
+@ref dash
+echo "today is $(echo monday)"
+@@
+@name cmdsub bare
+@ref dash
+X=$(echo hi); echo $X
+@@
+@name cmdsub nested arg
+@ref dash
+echo a$(echo b)c
+@@
+@name backtick
+@ref dash
+echo `echo hi`
+@@
+@name cmdsub status
+@ref dash
+X=$(false); echo $?
+@@
+@name arith
+@ref dash
+echo $((2 + 3))
+@@
+@name arith var
+@ref dash
+i=4; echo $((i * 2))
+@@
+@name dupfd
+@ref dash
+echo hi 2>&1
+@@
+@name stderr to null
+@ref dash
+ls /nonexistent-xyz 2>/dev/null; echo $?
+@@
+@name dup stderr merge
+@ref dash
+sh -c "echo out; echo err 1>&2" 2>&1 | cat
+@@
+@name negate
+@ref dash
+! false; echo $?
+@@
+@name negate true
+@ref dash
+! true; echo $?
+@@
+@name test bang
+@ref dash
+[ ! -f /nonexistent-xyz ] && echo absent
+@@
+@name test bang str
+@ref dash
+[ ! a = b ] && echo differ
+@@
+@name test -a
+@ref dash
+[ 1 = 1 -a 2 = 2 ] && echo both
+@@
+@name test -o
+@ref dash
+[ 1 = 2 -o 2 = 2 ] && echo either
+@@
+@name test -n bare
+@ref dash
+[ -n ] && echo nonempty
+@@
+@name test -s
+@ref dash
+echo x > /tmp/mshtest4; [ -s /tmp/mshtest4 ] && echo nonzero; rm -f /tmp/mshtest4
+@@
+@name test -r
+@ref dash
+touch "$MSH_TMP/readable"; [ -r "$MSH_TMP/readable" ] && echo readable
+@@
+@name glob
+@ref dash
+cd /tmp && mkdir -p mshglob && cd mshglob && touch a.txt b.txt && echo *.txt && cd /tmp && rm -rf mshglob
+@@
+@name glob nomatch
+@ref dash
+echo /tmp/no-such-glob-*.zzz
+@@
+@name shift
+@ref dash
+set -- a b c 2>/dev/null; echo $1
+@@
+@name colon
+@ref dash
+: ; echo $?
+@@
+@name heredoc
+@ref dash
+cat <<EOF
+line1
+line2
+EOF
+@@
+@name until
+@ref dash
+i=0; until [ $i = 2 ]; do echo $i; i=`expr $i + 1`; done
+@@
+@name case
+@ref dash
+case abc in a*) echo match;; *) echo no;; esac
+@@
+@name read
+@ref dash
+echo hello | { read x; echo "[$x]"; }
+@@
+@name dot source
+@ref dash
+echo "echo sourced" > /tmp/mshsrc.sh; . /tmp/mshsrc.sh; rm -f /tmp/mshsrc.sh
+@@
+@name exit code
+@ref dash
+exit 7
+@@
+@name multiline pipe
+@ref dash
+echo a |\
+ cat
+@@
+@name comment mid
+@ref dash
+echo a # trailing comment
+@@
+@name semicolon in quotes
+@ref dash
+echo "a;b"
+@@
+@name empty arg
+@ref dash
+f() { echo $#; }; f "" x
+@@
+@name var default
+@ref dash
+unset Q; echo ${Q:-fallback}
+@@
+@name var default set
+@ref dash
+Q=set; echo ${Q:-fallback}
+@@
+@name dollar at quoted
+@ref dash
+f() { for a in "$@"; do echo "[$a]"; done; }; f "x y" z
+@@
+@name dollar star
+@ref dash
+f() { echo "$*"; }; f a b
+@@
+@name assign no export
+@ref dash
+X=1; sh -c 'echo "[$X]"'
+@@
+@name env prefix
+@ref dash
+X=1 sh -c 'echo "[$X]"'; sh -c 'echo "[$X]"'
+@@
+@name escaped dollar
+@ref dash
+echo "\$HOME"
+@@
+@name single quote dollar
+@ref dash
+echo '$HOME'
+@@
+@name backslash space
+@ref dash
+echo a\ b
+@@
+@name tilde
+@ref dash
+echo ~ | grep -c / 
+@@
+@name echo brace
+@ref dash
+echo }
+@@
+@name echo paren word
+@ref dash
+echo "(x)"
+@@
+@name nested quotes
+@ref dash
+echo "a'b"
+@@
+@name pipe 3
+@ref dash
+printf "a\nb\nc\n" | grep -v b | wc -l
+@@
+@name func recursive
+@ref dash
+f() { [ $1 = 0 ] && return 0; echo $1; f `expr $1 - 1`; }; f 3
+@@
+@name while read
+@ref dash
+printf "1\n2\n" > /tmp/mshtest5; while read l; do echo "L$l"; done < /tmp/mshtest5; rm -f /tmp/mshtest5
+@@
+@name redir func
+@ref dash
+f() { echo inside; }; f > /tmp/mshtest6; cat /tmp/mshtest6; rm -f /tmp/mshtest6
+@@
+@name exit in func
+@ref dash
+f() { exit 4; }; f; echo notreached
+@@
+@name if no else status
+@ref dash
+if false; then echo x; fi; echo $?
+@@
+@name bg job
+@ref dash
+true & echo main
+@@
+@name 多 assignments
+@ref dash
+A=1 B=2; echo $A$B
+@@
+@name var in redir name
+@ref dash
+F=/tmp/mshtest7; echo z > $F; cat $F; rm -f $F
+@@
+@name nested if in while
+@ref dash
+i=0; while [ $i -lt 3 ]; do if [ $i = 1 ]; then echo one; fi; i=`expr $i + 1`; done
+@@
+@name printf builtin
+@ref dash
+printf "%s-%s\n" a b
+@@
+@name long pipeline status
+@ref dash
+false | true; echo $?
+@@
+@name unset var empty
+@ref dash
+unset ZZ; echo "[$ZZ]"
+@@
+@name digits word
+@ref dash
+echo 2 3
+@@
+@name redir to var file append
+@ref dash
+F=/tmp/mshtest8; : > $F; echo 1 >> $F; echo 2 >> $F; wc -l < $F; rm -f $F
+@@
+@name q1
+@ref dash
+echo "a  b"
+@@
+@name q2
+@ref dash
+echo a  b
+@@
+@name q3
+@ref dash
+X="a  b"; echo $X
+@@
+@name q4
+@ref dash
+X="a  b"; echo "$X"
+@@
+@name q5
+@ref dash
+echo 'a$b`c'
+@@
+@name q6
+@ref dash
+echo "a\"b"
+@@
+@name q7
+@ref dash
+echo a\"b
+@@
+@name q8
+@ref dash
+X=; echo "[$X]"
+@@
+@name q9
+@ref dash
+X=; echo [$X]
+@@
+@name q10
+@ref dash
+unset X; echo "[${X}]"
+@@
+@name q11
+@ref dash
+echo "" "" | cat -A 2>/dev/null || echo "" ""
+@@
+@name q12
+@ref dash
+f() { echo $#; }; f ""
+@@
+@name q13
+@ref dash
+f() { echo $#; }; unset Z; f $Z
+@@
+@name q14
+@ref dash
+f() { echo $#; }; f "$Z"
+@@
+@name q15
+@ref dash
+echo "a"b"c"
+@@
+@name q16
+@ref dash
+echo a'b'c
+@@
+@name q17
+@ref dash
+IFS=:; X=a:b:c; for w in $X; do echo "[$w]"; done
+@@
+@name q18
+@ref dash
+IFS=:; X=a::c; for w in $X; do echo "[$w]"; done
+@@
+@name q19
+@ref dash
+echo "$(echo "nested \"quotes\"")"
+@@
+@name q20
+@ref dash
+echo $((1+2))$((3+4))
+@@
+@name p1
+@ref dash
+unset V; echo ${V:-d}
+@@
+@name p2
+@ref dash
+V=; echo ${V:-d}
+@@
+@name p3
+@ref dash
+V=; echo ${V-d}
+@@
+@name p4
+@ref dash
+unset V; echo ${V-d}
+@@
+@name p5
+@ref dash
+unset V; echo ${V:=d}; echo $V
+@@
+@name p6
+@ref dash
+V=x; echo ${V:+y}
+@@
+@name p7
+@ref dash
+unset V; echo ${V:+y}
+@@
+@name p8
+@ref dash
+V=abcdef; echo ${#V}
+@@
+@name p9
+@ref dash
+V=a/b/c; echo ${V#*/}
+@@
+@name p10
+@ref dash
+V=a/b/c; echo ${V##*/}
+@@
+@name p11
+@ref dash
+V=a/b/c; echo ${V%/*}
+@@
+@name p12
+@ref dash
+V=a/b/c; echo ${V%%/*}
+@@
+@name p13
+@ref dash
+V=file.tar.gz; echo ${V%.gz}
+@@
+@name p14
+@ref dash
+V=file.tar.gz; echo ${V%%.*}
+@@
+@name p15
+@ref dash
+echo ${HOME:+set}
+@@
+@name p16
+@ref dash
+f() { echo ${1:-none}; }; f; f x
+@@
+@name p17
+@ref dash
+V=abc; echo ${V#x}
+@@
+@name p18
+@ref dash
+unset V; echo "[${V#x}]"
+@@
+@name p19
+@ref dash
+set -- a b c; echo $#; echo $2
+@@
+@name p20
+@ref dash
+set -- a b c; shift; echo $*
+@@
+@name p21
+@ref dash
+set -- a b c; shift 2; echo $1; echo $#
+@@
+@name p22
+@ref dash
+set -- ; echo $#
+@@
+@name a1
+@ref dash
+echo $((1+2*3))
+@@
+@name a2
+@ref dash
+echo $(((1+2)*3))
+@@
+@name a3
+@ref dash
+echo $((10/3))
+@@
+@name a4
+@ref dash
+echo $((10%3))
+@@
+@name a5
+@ref dash
+echo $((-5+2))
+@@
+@name a6
+@ref dash
+echo $((1<2))
+@@
+@name a7
+@ref dash
+echo $((2<=2))
+@@
+@name a8
+@ref dash
+echo $((1==2))
+@@
+@name a9
+@ref dash
+echo $((1!=2))
+@@
+@name a10
+@ref dash
+echo $((1&&0))
+@@
+@name a11
+@ref dash
+echo $((1||0))
+@@
+@name a12
+@ref dash
+echo $((1<<4))
+@@
+@name a13
+@ref dash
+echo $((255&15))
+@@
+@name a14
+@ref dash
+echo $((1|6))
+@@
+@name a15
+@ref dash
+x=7; echo $((x*x))
+@@
+@name a16
+@ref dash
+x=7; y=2; echo $((x-y))
+@@
+@name a17
+@ref dash
+i=0; while [ $i -lt 3 ]; do i=$((i+1)); done; echo $i
+@@
+@name a18
+@ref dash
+echo $(( 3 ))
+@@
+@name a19
+@ref dash
+echo $((0x10))
+@@
+@name a20
+@ref dash
+echo $((!0))
+@@
+@name c1
+@ref dash
+echo $(echo a; echo b)
+@@
+@name c2
+@ref dash
+echo "$(echo a; echo b)"
+@@
+@name c3
+@ref dash
+echo $(echo)
+@@
+@name c4
+@ref dash
+echo "[$(echo)]"
+@@
+@name c5
+@ref dash
+echo $(echo "  spaced  ")
+@@
+@name c6
+@ref dash
+echo "$(echo "  spaced  ")"
+@@
+@name c7
+@ref dash
+X=$(echo one two); echo $X
+@@
+@name c8
+@ref dash
+echo $(( $(echo 3) + 4 ))
+@@
+@name c9
+@ref dash
+echo `echo $(echo deep)`
+@@
+@name c10
+@ref dash
+f() { echo fn; }; echo $(f)
+@@
+@name c11
+@ref bash
+@note dash keeps $? from before the substitution; bash updates it and so do we
+echo $(exit 3)$?
+@@
+@name c12
+@ref dash
+for i in $(echo a b c); do echo $i; done
+@@
+@name c13
+@ref dash
+if [ "$(echo yes)" = yes ]; then echo ok; fi
+@@
+@name c14
+@ref dash
+echo $(echo "a
+b")
+@@
+@name r1
+@ref dash
+echo a > /tmp/mt_r1; echo b > /tmp/mt_r1; cat /tmp/mt_r1; rm -f /tmp/mt_r1
+@@
+@name r2
+@ref dash
+: > /tmp/mt_r2; wc -c < /tmp/mt_r2; rm -f /tmp/mt_r2
+@@
+@name r3
+@ref dash
+> /tmp/mt_r3; ls /tmp/mt_r3; rm -f /tmp/mt_r3
+@@
+@name r4
+@ref dash
+echo x 1>&2 2>/dev/null; echo done
+@@
+@name r5
+@ref dash
+ls /nope 2>&1 | grep -c .
+@@
+@name r6
+@ref dash
+{ echo a; echo b; } > /tmp/mt_r6; cat /tmp/mt_r6; rm -f /tmp/mt_r6
+@@
+@name r7
+@ref dash
+for i in 1 2; do echo $i; done > /tmp/mt_r7; cat /tmp/mt_r7; rm -f /tmp/mt_r7
+@@
+@name r8
+@ref dash
+printf "a\nb\n" > /tmp/mt_r8; while read l; do echo "[$l]"; done < /tmp/mt_r8; rm -f /tmp/mt_r8
+@@
+@name r9
+@ref dash
+cat <<EOF
+hello $USER_NOT_SET x
+EOF
+@@
+@name r10
+@ref dash
+cat <<'EOF'
+literal $HOME
+EOF
+@@
+@name r11
+@ref dash
+cat <<-EOF
+	indented
+	EOF
+@@
+@name r12
+@ref dash
+V=w; cat <<EOF
+value $V
+EOF
+@@
+@name r13
+@ref dash
+exec 2>/dev/null; echo after
+@@
+@name r14
+@ref dash
+echo a >> /tmp/mt_r14; echo b >> /tmp/mt_r14; wc -l < /tmp/mt_r14; rm -f /tmp/mt_r14
+@@
+@name r15
+@ref bash
+@note dash uses 2 for a redirection error, bash and busybox use 1
+cat < /nonexistent-file-xyz; echo $?
+@@
+@name r16
+@ref bash
+@note dash uses 2 for a redirection error, bash and busybox use 1
+echo hi > /nonexistent-dir-xyz/f; echo $?
+@@
+@name r17
+@ref dash
+(echo sub) > /tmp/mt_r17; cat /tmp/mt_r17; rm -f /tmp/mt_r17
+@@
+@name r18
+@ref dash
+if true; then echo t; fi > /tmp/mt_r18; cat /tmp/mt_r18; rm -f /tmp/mt_r18
+@@
+@name f1
+@ref dash
+for i in 1 2 3; do for j in a b; do echo $i$j; done; done
+@@
+@name f2
+@ref dash
+for i in 1 2 3; do for j in a b; do [ $j = b ] && continue 2; echo $i$j; done; done
+@@
+@name f3
+@ref dash
+i=0; while true; do i=$((i+1)); [ $i -ge 3 ] && break; done; echo $i
+@@
+@name f4
+@ref dash
+until false; do echo once; break; done
+@@
+@name f5
+@ref dash
+case foo in f*) echo star;; esac
+@@
+@name f6
+@ref dash
+case foo in bar) echo no;; foo|baz) echo yes;; esac
+@@
+@name f7
+@ref dash
+case foo in *) echo default;; esac
+@@
+@name f8
+@ref dash
+case "a b" in "a b") echo quoted;; esac
+@@
+@name f9
+@ref dash
+case abc in a?c) echo q;; esac
+@@
+@name f10
+@ref dash
+case abc in [ab]*) echo class;; esac
+@@
+@name f11
+@ref dash
+case x in a) echo a;; esac; echo $?
+@@
+@name f12
+@ref dash
+f() { if [ $1 = a ]; then return 1; fi; return 0; }; f a; echo $?; f b; echo $?
+@@
+@name f13
+@ref dash
+f() { g() { echo inner; }; g; }; f
+@@
+@name f14
+@ref dash
+f() { local x=1; echo $x; }; x=outer; f; echo $x
+@@
+@name f15
+@ref dash
+f() { return; }; false; f; echo $?
+@@
+@name f16
+@ref dash
+! true; echo $?
+@@
+@name f17
+@ref dash
+if ! false; then echo neg; fi
+@@
+@name f18
+@ref dash
+true && ! false && echo chain
+@@
+@name f19
+@ref dash
+for i in; do echo never; done; echo empty
+@@
+@name f20
+@ref dash
+set -- x y; for i; do echo $i; done
+@@
+@name f21
+@ref dash
+i=3; case $i in 1|2) echo low;; 3|4) echo mid;; esac
+@@
+@name f22
+@ref dash
+while read x; do echo "got $x"; done <<EOF
+p
+q
+EOF
+@@
+@name g1
+@ref dash
+cd /tmp && rm -rf mg1 && mkdir mg1 && cd mg1 && touch a.c b.c d.h && echo *.c && echo *.h && echo * && cd / && rm -rf /tmp/mg1
+@@
+@name g2
+@ref dash
+cd /tmp && rm -rf mg2 && mkdir mg2 && cd mg2 && touch .hidden vis && echo * && echo .* | tr " " "\n" | grep -c hidden && cd / && rm -rf /tmp/mg2
+@@
+@name g3
+@ref dash
+cd /tmp && rm -rf mg3 && mkdir -p mg3/sub && touch mg3/sub/x.txt && echo /tmp/mg3/*/*.txt && rm -rf /tmp/mg3
+@@
+@name g4
+@ref dash
+echo /tmp/definitely-not-here-*
+@@
+@name g5
+@ref dash
+cd /tmp && rm -rf mg5 && mkdir mg5 && cd mg5 && touch aa ab ac && echo a? && echo "a?" && cd / && rm -rf /tmp/mg5
+@@
+@name g6
+@ref dash
+cd /tmp && rm -rf mg6 && mkdir mg6 && cd mg6 && touch f1 f2 && echo "*" && cd / && rm -rf /tmp/mg6
+@@
+@name g7
+@ref dash
+cd /tmp && rm -rf mg7 && mkdir mg7 && cd mg7 && touch x1 x2 && for f in x*; do echo "[$f]"; done && cd / && rm -rf /tmp/mg7
+@@
+@name t1
+@ref dash
+[ a = a ]; echo $?
+@@
+@name t2
+@ref dash
+[ a != a ]; echo $?
+@@
+@name t3
+@ref dash
+[ ! a = a ]; echo $?
+@@
+@name t4
+@ref dash
+[ -z "" ]; echo $?
+@@
+@name t5
+@ref dash
+[ -n "" ]; echo $?
+@@
+@name t6
+@ref dash
+[ 1 -lt 2 -a 3 -lt 4 ]; echo $?
+@@
+@name t7
+@ref dash
+[ 1 -lt 2 -o 5 -lt 4 ]; echo $?
+@@
+@name t8
+@ref dash
+[ 5 -gt 4 ]; echo $?
+@@
+@name t9
+@ref dash
+[ -d /tmp ]; echo $?
+@@
+@name t10
+@ref dash
+[ -f /tmp ]; echo $?
+@@
+@name t11
+@ref dash
+touch "$MSH_TMP/readable"; [ -e "$MSH_TMP/readable" ]; echo $?
+@@
+@name t12
+@ref dash
+[ "" ]; echo $?
+@@
+@name t13
+@ref dash
+[ x ]; echo $?
+@@
+@name t14
+@ref dash
+test 1 -eq 1; echo $?
+@@
+@name t15
+@ref dash
+[ ! -d /tmp ]; echo $?
+@@
+@name t16
+@ref dash
+[ \( 1 = 1 \) ]; echo $?
+@@
+@name t17
+@ref dash
+[ -n x -a -n y ]; echo $?
+@@
+@name b1
+@ref dash
+:; echo $?
+@@
+@name b2
+@ref dash
+true; echo $?
+@@
+@name b3
+@ref dash
+false; echo $?
+@@
+@name b4
+@ref dash
+echo -n a; echo b
+@@
+@name b5
+@ref dash
+printf "%s\n" one two three
+@@
+@name b6
+@ref dash
+printf "%d-%s|" 1 a 2 b; echo
+@@
+@name b7
+@ref dash
+printf "no newline"; echo
+@@
+@name b8
+@ref dash
+X=1; export X; sh -c 'echo $X'
+@@
+@name b9
+@ref dash
+X=1; sh -c 'echo "[$X]"'
+@@
+@name b10
+@ref dash
+export Y=2; sh -c 'echo $Y'
+@@
+@name b11
+@ref dash
+export Z=3; unset Z; sh -c 'echo "[$Z]"'
+@@
+@name b12
+@ref dash
+cd /tmp; pwd
+@@
+@name b13
+@ref bash
+@note dash uses 2 for a failed cd, bash uses 1
+cd /nonexistent-xyz; echo $?
+@@
+@name b14
+@ref dash
+eval "echo evaled"
+@@
+@name b15
+@ref dash
+eval "X=5"; echo $X
+@@
+@name b16
+@ref dash
+echo "echo sourced; S=9" > "$MSH_TMP/src.sh"; . "$MSH_TMP/src.sh"; echo $S
+@@
+@name b17
+@ref dash
+nonexistent-command-xyz; echo $?
+@@
+@name b18
+@ref dash
+/nonexistent/path/xyz; echo $?
+@@
+@name b19
+@ref dash
+echo a | nonexistent-command-xyz; echo $?
+@@
+@name b20
+@ref dash
+exit 5
+@@
+@name b21
+@ref dash
+true; exit
+@@
+@name b22
+@ref dash
+false; exit
+@@
+@name b23
+@ref dash
+read x < /dev/null; echo $?
+@@
+@name b24
+@ref dash
+printf "a b\n" | { read p q; echo "$p|$q"; }
+@@
+@name b25
+@ref dash
+printf "a b c\n" | { read p q; echo "$p|$q"; }
+@@
+@name b26
+@ref dash
+printf "  lead\n" | { read p; echo "[$p]"; }
+@@
+@name o1
+@ref dash
+set -e; false; echo not-reached
+@@
+@name o2
+@ref dash
+set -e; false || true; echo reached
+@@
+@name o3
+@ref dash
+set -e; if false; then echo x; fi; echo reached
+@@
+@name o4
+@ref dash
+set -e; while false; do echo x; done; echo reached
+@@
+@name o5
+@ref dash
+set -e; ! false; echo reached
+@@
+@name o6
+@ref dash
+set -e; true; echo reached
+@@
+@name o7
+@ref dash
+set -u; unset Q; echo $Q; echo not-reached
+@@
+@name o8
+@ref dash
+set -u; Q=1; echo $Q
+@@
+@name pl1
+@ref dash
+echo a | cat | cat
+@@
+@name pl2
+@ref dash
+printf "1\n2\n3\n" | head -2
+@@
+@name pl3
+@ref dash
+false | true; echo $?
+@@
+@name pl4
+@ref dash
+true | false; echo $?
+@@
+@name pl5
+@ref dash
+echo x | while read l; do echo "L$l"; done
+@@
+@name pl6
+@ref dash
+seq 1 5 2>/dev/null | wc -l || printf "1\n2\n3\n4\n5\n" | wc -l
+@@
+@name pl7
+@ref dash
+! echo a | grep -q b; echo $?
+@@
+@name pl8
+@ref dash
+f() { echo fn; }; f | cat
+@@
+@name m1
+@ref dash
+echo $0 >/dev/null; echo ok
+@@
+@name m2
+@ref dash
+echo "$@" >/dev/null; echo ok
+@@
+@name m3
+@ref dash
+X=a; Y=b; echo $X$Y
+@@
+@name m4
+@ref dash
+echo a;echo b
+@@
+@name m5
+@ref dash
+echo a ;; echo b
+@@
+@name m6
+@ref dash
+# just a comment
+echo after
+@@
+@name m7
+@ref dash
+echo a # comment
+echo b
+@@
+@name m8
+@ref dash
+echo "#notcomment"
+@@
+@name m9
+@ref dash
+echo a\
+b
+@@
+@name m10
+@ref dash
+if true
+then
+ echo multi
+fi
+@@
+@name m11
+@ref dash
+for i in a \
+ b; do echo $i; done
+@@
+@name m12
+@ref dash
+x=1
+y=2
+echo $x$y
+@@
+@name m13
+@ref dash
+(exit 3); echo $?
+@@
+@name m14
+@ref dash
+(true) && echo sub-ok
+@@
+@name m15
+@ref dash
+echo $(( $# ))
+@@
+@name m16
+@ref dash
+f() { echo "$0"; }; f >/dev/null; echo ok
+@@
+@name m17
+@ref dash
+echo end
+@@
+@name ar1
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(one two three); echo ${a[0]} ${a[1]} ${a[2]}
+@@
+@name ar2
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(one two three); echo "[${a[@]}]"
+@@
+@name ar3
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(one two three); echo "[${a[*]}]"
+@@
+@name ar4
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(one two three); echo ${#a[@]} ${#a[*]} ${#a[0]}
+@@
+@name ar5
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(one two); echo "[$a]" "[${a}]" "[${a[0]}]"
+@@
+@name ar6
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(one); echo "[${a[9]}]"
+@@
+@name ar7
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(x y z); echo ${a[-1]} ${a[-2]}
+@@
+@name ar8
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(one two three); a[5]=six; echo ${#a[@]} "[${a[@]}]"
+@@
+@name ar9
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(one two three); a[5]=six; echo "[${!a[@]}]"
+@@
+@name ar10
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+b=(x y); b=z; echo "[${b[@]}]"
+@@
+@name ar11
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+c=(p q); c+=(r s); echo "[${c[@]}]" ${#c[@]}
+@@
+@name ar12
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+d=hello; d+=world; echo $d
+@@
+@name ar13
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+e=("a b" c); echo ${#e[@]}
+@@
+@name ar14
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+e=("a b" c); for i in "${e[@]}"; do echo "[$i]"; done
+@@
+@name ar15
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+e=("a b" c); for i in ${e[@]}; do echo "[$i]"; done
+@@
+@name ar16
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+f=(1 2 3); unset f[1]; echo ${#f[@]} "[${f[@]}]" "[${!f[@]}]"
+@@
+@name ar17
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+g=(); echo ${#g[@]} "[${g[@]}]"
+@@
+@name ar18
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+h=(4 5 6); echo $((h[1]+10)) $((h[0]*h[2]))
+@@
+@name ar19
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+i=(w x y z); n=2; echo ${i[n]} ${i[n+1]}
+@@
+@name ar20
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+k=(a b c d); echo "[${k[@]:1:2}]" "[${k[@]:2}]"
+@@
+@name ar21
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+m=(one); echo "[${m[@]}]" "[${m[0]}]" "[$m]"
+@@
+@name ar22
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+echo ${#nosucharray[@]}
+@@
+@name ar23
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+n=(a b c); IFS=:; echo "[${n[*]}]"; unset IFS; echo "[${n[*]}]"
+@@
+@name ar24
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+p=(a b c); q="${p[@]}"; echo "[$q]"
+@@
+@name ar25
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+r=(); r[2]=z; echo ${#r[@]} "[${r[@]}]" "[${!r[@]}]"
+@@
+@name ar26
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+s=(a b c); s=(); echo "[${s[@]}]" ${#s[@]}
+@@
+@name ar27
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+u=(a "b c" d); for x in "${u[@]}"; do echo "<$x>"; done
+@@
+@name ar28
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+v=(x); echo "[${v[0]:-def}]" "[${v[9]:-def}]"
+@@
+@name ar29
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+w=($(echo a b c)); echo ${#w[@]} ${w[1]}
+@@
+@name ar30
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+y=(*.nosuchglob-xyz); echo ${#y[@]} "[${y[0]}]"
+@@
+@name ar31
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(1 2 3); a[1]=X; echo "[${a[@]}]"
+@@
+@name ar32
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(1 2 3); a[1]+=X; echo "[${a[@]}]"
+@@
+@name ar33
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(a b c); echo "[${a[@]}]" ; unset a; echo ${#a[@]}
+@@
+@name ar34
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+f() { local a=(1 2); echo ${#a[@]}; }; a=(9 8 7); f; echo ${#a[@]}
+@@
+@name ar35
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(10 20 30); t=0; for v in "${a[@]}"; do t=$((t+v)); done; echo $t
+@@
+@name ar36
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(x y); echo "${a[0]}-${a[1]}"
+@@
+@name ar37
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(one two); case ${a[1]} in two) echo matched;; esac
+@@
+@name ar38
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(aa bb); echo "${a[0]#a}" "${a[1]%b}"
+@@
+@name ar39
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(a b c); i=0; while [ $i -lt ${#a[@]} ]; do echo "$i=${a[$i]}"; i=$((i+1)); done
+@@
+@name ar40
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(3 1 2); echo "${a[@]}" | tr " " "\n" | sort | tr "\n" " "; echo
+@@
+@name ar41
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+declare_test=(1 2 3) ; echo ${#declare_test[@]}
+@@
+@name ar42
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=("" x); echo ${#a[@]} "[${a[0]}]"
+@@
+@name ar43
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(a b); b=(c d); echo "[${a[@]}${b[@]}]"
+@@
+@name ar44
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(a b c); echo "${a[@]: -2}"
+@@
+@name ar46
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+v=abcdef; echo "${v:2}" "${v:2:3}" "${v: -2}"
+@@
+@name ar47
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+v=abcdef; echo "${v:0:0}" "[${v:9}]"
+@@
+@name ar48
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+x=y; y=deep; echo "${!x}"
+@@
+@name ar49
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(p q r); echo "${a[$((1+1))]}"
+@@
+@name ar50
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(1 2); a+=(3); a+=(4 5); echo ${#a[@]} "[${a[@]}]"
+@@
+@name ar51
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+set -- s t; a=("$@"); echo ${#a[@]} "[${a[1]}]"
+@@
+@name ar52
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(a b c); echo "[${a[*]:1}]"
+@@
+@name ar53
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+f() { a=(inside); }; a=(outside); f; echo "[${a[@]}]"
+@@
+@name ar54
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(x); echo ${a[0]:+set} ${a[1]:+set}
+@@
+@name ar55
+@ref bash
+@note arrays are a bash extension; dash has none, so bash is the reference
+a=(1 2 3); n=${#a[@]}; echo $((n*2))
+@@
